@@ -44,6 +44,11 @@ contract StakeQuantileTreeHarness {
         return _tree[key];
     }
 
+    function packedPairTotal(uint256 key) external view returns (uint256) {
+        uint256 word = _tree[key];
+        return (word & type(uint128).max) + (word >> 128);
+    }
+
     function childStake(uint256 level, uint256 prefix, uint256 child) external view returns (uint256) {
         if (!validNode(level, prefix, child)) {
             revert StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode();
@@ -79,6 +84,24 @@ contract StakeQuantileTreeHarness {
 
     function rawKey(uint256 level, uint256 prefix, uint256 child) public pure returns (uint256) {
         return (level << 16) | (prefix << 3) | (child >> 1);
+    }
+
+    function pathPrefix(uint16 code, uint256 level) public pure returns (uint256) {
+        if (level >= RADIX_LEVELS) {
+            revert StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode();
+        }
+        return level == 0 ? 0 : uint256(code) >> (16 - level * 4);
+    }
+
+    function pathChild(uint16 code, uint256 level) public pure returns (uint256) {
+        if (level >= RADIX_LEVELS) {
+            revert StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode();
+        }
+        return (uint256(code) >> (12 - level * 4)) & 0xF;
+    }
+
+    function pathKey(uint16 code, uint256 level) external pure returns (uint256) {
+        return rawKey(level, pathPrefix(code, level), pathChild(code, level));
     }
 
     function validNode(uint256 level, uint256 prefix, uint256 child) public pure returns (bool) {

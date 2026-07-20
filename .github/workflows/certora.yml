@@ -38,28 +38,42 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
-          - name: storage-basics
+          - name: storage-safety
             rules: >-
               packedKeysAreInjectiveAcrossNodes zeroAmountIsStorageNoOp
-              successfulUpdateIncreasesTotal oversizedUpdateRevertsAtomically
-              overflowingRootLaneRevertsAtomically
-          - name: storage-algebra
-            rules: >-
-              updateChangesExactlyItsFourPathLanes splitUpdateEqualsCombinedUpdate
-              updatesCommute
-          - name: quantiles
-            rules: >-
-              lowerMedianMatchesExplicitQuantile quantilesAreMonotone
-              crossingChildSelectsFirstRankCrossing lowerMedianRankIsCeilingHalf
+              oversizedUpdateRevertsAtomically overflowingRootLaneRevertsAtomically
+          - name: storage-path-word
+            rules: pathPackedWordChangesExactly
+          - name: storage-off-path
+            rules: offPathPackedWordsRemainUnchanged
+          - name: storage-root-total
+            rules: successfulUpdateIncreasesRootPairTotal
+          - name: storage-split
+            rules: splitUpdateEqualsCombinedUpdate
+          - name: storage-commute
+            rules: updatesCommute
+          - name: quantile-median-consistency
+            rules: lowerMedianMatchesExplicitQuantile
+          - name: quantile-monotonicity
+            rules: quantilesAreMonotone
+          - name: quantile-crossing
+            rules: crossingChildSelectsFirstRankCrossing
+          - name: quantile-rank
+            rules: lowerMedianRankIsCeilingHalf
           - name: weights
             rules: >-
               weightEncodingContainsInput weightCodesAreMonotone invalidWeightCodesRevert
-          - name: price-encoding
-            rules: >-
-              priceEncodingContainsInput priceCodesAreMonotone invalidPricesRevert
+          - name: price-encoding-containment
+            rules: priceEncodingContainsInput
+          - name: price-encoding-roundtrip
+            rules: priceGeneratedBucketEndpointsRoundTrip
+          - name: price-encoding-monotonicity
+            rules: priceCodesAreMonotone
+          - name: price-invalid-inputs
+            rules: invalidPricesRevert
           - name: price-decoding
             rules: >-
               successfulPriceBucketsAreOrdered emptyIntegerPriceBucketsRevert

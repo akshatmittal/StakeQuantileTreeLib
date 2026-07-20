@@ -4,11 +4,15 @@ methods {
     function rawQuantile(uint256, uint256) external returns (uint16) envfree;
     function rawLowerMedian() external returns (uint16, uint256) envfree;
     function packedWord(uint256) external returns (uint256) envfree;
+    function packedPairTotal(uint256) external returns (uint256) envfree;
     function childStake(uint256, uint256, uint256) external returns (uint256) envfree;
     function crossingChild(uint256, uint256, uint256) external returns (uint256, uint256) envfree;
     function nodeTotal(uint256, uint256) external returns (uint256) envfree;
     function nodeStakeBefore(uint256, uint256, uint256) external returns (uint256) envfree;
     function rawKey(uint256, uint256, uint256) external returns (uint256) envfree;
+    function pathPrefix(uint16, uint256) external returns (uint256) envfree;
+    function pathChild(uint16, uint256) external returns (uint256) envfree;
+    function pathKey(uint16, uint256) external returns (uint256) envfree;
     function validNode(uint256, uint256, uint256) external returns (bool) envfree;
     function isOnPath(uint16, uint256, uint256, uint256) external returns (bool) envfree;
     function lowerMedianRank(uint256) external returns (uint256) envfree;
@@ -47,35 +51,44 @@ rule zeroAmountIsStorageNoOp(env e, uint16 code) {
     assert lastStorage == before, "zero stake must not change any storage";
 }
 
-rule updateChangesExactlyItsFourPathLanes(
-    env e,
-    uint16 code,
-    uint256 amount,
-    uint256 level,
-    uint256 prefix,
-    uint256 child
-) {
-    require validNode(level, prefix, child);
-    mathint before = childStake(level, prefix, child);
+rule pathPackedWordChangesExactly(env e, uint16 code, uint256 amount, uint256 level) {
+    require level < 4;
+    uint256 key = pathKey(code, level);
+    uint256 child = pathChild(code, level);
+    mathint before = packedWord(key);
 
     addRaw(e, code, amount);
 
-    mathint after = childStake(level, prefix, child);
-    if (isOnPath(code, level, prefix, child)) {
-        assert after == before + amount, "a path lane must increase by the amount";
+    mathint after = packedWord(key);
+    if (child % 2 == 0) {
+        assert after == before + amount, "an even path lane must increase without changing its sibling";
     } else {
-        assert after == before, "an off-path lane must remain unchanged";
+        assert after == before + amount * 340282366920938463463374607431768211456,
+            "an odd path lane must increase without changing its sibling";
     }
-    assert after <= max_uint128, "packed child stake must remain uint128-bounded";
 }
 
-rule successfulUpdateIncreasesTotal(env e, uint16 code, uint256 amount) {
-    mathint before = rawTotal();
+rule offPathPackedWordsRemainUnchanged(env e, uint16 code, uint256 amount, uint256 key) {
+    require key != pathKey(code, 0);
+    require key != pathKey(code, 1);
+    require key != pathKey(code, 2);
+    require key != pathKey(code, 3);
+    uint256 before = packedWord(key);
 
     addRaw(e, code, amount);
 
-    mathint after = rawTotal();
-    assert after == before + amount, "a successful update must increase support exactly";
+    assert packedWord(key) == before, "an update must not change words outside its four-word path";
+}
+
+// Together with offPathPackedWordsRemainUnchanged, this proves the authoritative root sum increases by amount.
+rule successfulUpdateIncreasesRootPairTotal(env e, uint16 code, uint256 amount) {
+    uint256 rootKey = pathKey(code, 0);
+    mathint before = packedPairTotal(rootKey);
+
+    addRaw(e, code, amount);
+
+    mathint after = packedPairTotal(rootKey);
+    assert after == before + amount, "a successful update must increase its root pair total exactly";
 }
 
 rule oversizedUpdateRevertsAtomically(env e, uint16 code, uint256 amount) {
@@ -102,33 +115,48 @@ rule overflowingRootLaneRevertsAtomically(env e, uint16 code, uint256 amount) {
     assert lastStorage == before, "an overflowing update must be atomic";
 }
 
-rule splitUpdateEqualsCombinedUpdate(env e, uint16 code, uint128 first, uint128 second) {
+// key is universally quantified, so equality here is extensional equality of the packed mapping.
+rule splitUpdateEqualsCombinedUpdate(env e, uint16 code, uint128 first, uint128 second, uint256 key) {
     require first + second <= max_uint128;
     storage initial = lastStorage;
 
     addRaw(e, code, first) at initial;
     addRaw(e, code, second);
-    storage split = lastStorage;
+    uint256 splitWord = packedWord(key);
+    uint256 splitTotal = trackedTotal();
 
     addRaw(e, code, require_uint256(first + second)) at initial;
-    storage combined = lastStorage;
+    uint256 combinedWord = packedWord(key);
+    uint256 combinedTotal = trackedTotal();
 
-    assert split == combined, "splitting an update must not change the resulting tree";
+    assert splitWord == combinedWord, "splitting an update must not change any packed tree word";
+    assert splitTotal == combinedTotal, "splitting an update must not change tracked support";
 }
 
-rule updatesCommute(env e, uint16 firstCode, uint16 secondCode, uint128 first, uint128 second) {
+// As above, an arbitrary key checks every possible packed mapping entry without whole-EVM storage equality.
+rule updatesCommute(
+    env e,
+    uint16 firstCode,
+    uint16 secondCode,
+    uint128 first,
+    uint128 second,
+    uint256 key
+) {
     require first + second <= max_uint128;
     storage initial = lastStorage;
 
     addRaw(e, firstCode, first) at initial;
     addRaw(e, secondCode, second);
-    storage forward = lastStorage;
+    uint256 forwardWord = packedWord(key);
+    uint256 forwardTotal = trackedTotal();
 
     addRaw(e, secondCode, second) at initial;
     addRaw(e, firstCode, first);
-    storage reverse = lastStorage;
+    uint256 reverseWord = packedWord(key);
+    uint256 reverseTotal = trackedTotal();
 
-    assert forward == reverse, "insertion order must not change the resulting tree";
+    assert forwardWord == reverseWord, "insertion order must not change any packed tree word";
+    assert forwardTotal == reverseTotal, "insertion order must not change tracked support";
 }
 
 rule lowerMedianMatchesExplicitQuantile() {
@@ -218,6 +246,15 @@ rule priceEncodingContainsInput(uint256 price) {
     assert low <= price && price <= high, "a price must be inside its encoded bucket";
     assert low <= representative && representative <= high,
         "the representative must be inside its bucket";
+}
+
+rule priceGeneratedBucketEndpointsRoundTrip(uint256 price) {
+    uint256 maximum = maxPrice();
+    require 0 < price && price <= maximum;
+    uint16 code = priceCode(price);
+    uint256 low = priceLow(code);
+    uint256 high = priceHigh(code);
+
     assert priceCode(low) == code && priceCode(high) == code,
         "both generated bucket endpoints must round-trip";
 }
