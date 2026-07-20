@@ -20,6 +20,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CERTORA_VERSION: 8.17.1
   CERTORA_PROVER_COMMIT: aeb463b2b88d45900c60fd94d44908622994f04d
@@ -59,20 +63,20 @@ jobs:
           - terminalPriceCodesClamp
           - invalidPricesRevert
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           run_install: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -102,7 +106,7 @@ jobs:
             https://github.com/Certora/CertoraProver.git "$RUNNER_TEMP/CertoraProver"
           test "$(git -C "$RUNNER_TEMP/CertoraProver" rev-parse HEAD)" = "$CERTORA_PROVER_COMMIT"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -132,7 +136,7 @@ jobs:
 
       - name: Upload local prover reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: certora-reports-${{ matrix.rule }}
           path: emv-*/Reports/
