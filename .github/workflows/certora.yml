@@ -16,31 +16,6 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/certora.yml"
   workflow_dispatch:
-    inputs:
-      target:
-        description: Matrix job name to run, or all
-        required: false
-        type: choice
-        default: all
-        options:
-          - all
-          - storage-safety
-          - storage-path-word
-          - storage-off-path
-          - storage-root-total
-          - storage-split
-          - storage-commute
-          - quantile-median-consistency
-          - quantile-monotonicity
-          - quantile-crossing
-          - quantile-rank
-          - weights
-          - price-encoding-containment
-          - price-encoding-low-roundtrip
-          - price-encoding-high-roundtrip
-          - price-encoding-monotonicity
-          - price-invalid-inputs
-          - price-decoding
 
 permissions:
   contents: read
@@ -59,7 +34,6 @@ env:
 jobs:
   verify:
     name: Verify ${{ matrix.name }}
-    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.name
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
