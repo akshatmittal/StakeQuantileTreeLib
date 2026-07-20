@@ -1,0 +1,140 @@
+name: Certora Prover
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "certora/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/certora.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "certora/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/certora.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CERTORA_VERSION: 8.17.1
+  CERTORA_PROVER_COMMIT: aeb463b2b88d45900c60fd94d44908622994f04d
+  CERTORA_PROVER_SHA256: fe1c68bb6b24140f825abed2d6b45793525bea2bd982c5e576991928bb06d6e3
+  TAC_OPTIMIZER_LOCK_SHA256: 680dfe879e52c883207bcbda848613f1091d2eed013f37c7775b92bb7c1b7899
+  RUST_TOOLCHAIN: 1.97.1
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.rule }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        rule:
+          - packedKeysAreInjectiveAcrossNodes
+          - zeroAmountIsStorageNoOp
+          - updateChangesExactlyItsFourPathLanes
+          - successfulUpdateIncreasesTotal
+          - oversizedUpdateRevertsAtomically
+          - overflowingRootLaneRevertsAtomically
+          - splitUpdateEqualsCombinedUpdate
+          - updatesCommute
+          - lowerMedianMatchesExplicitQuantile
+          - quantilesAreMonotone
+          - crossingChildSelectsFirstRankCrossing
+          - lowerMedianRankIsCeilingHalf
+          - weightEncodingContainsInput
+          - weightCodesAreMonotone
+          - invalidWeightCodesRevert
+          - priceEncodingContainsInput
+          - priceCodesAreMonotone
+          - successfulPriceBucketsAreOrdered
+          - emptyIntegerPriceBucketsRevert
+          - terminalPriceCodesClamp
+          - invalidPricesRevert
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Certora CLI, Solidity, and SMT solvers
+        run: |
+          pip install certora-cli==8.17.1 solc-select
+          solc-select install 0.8.35
+          solc-select use 0.8.35
+          sudo apt-get update
+          sudo apt-get install --yes z3 cvc5
+
+      - name: Download local Certora Prover
+        run: |
+          curl --fail --location \
+            "https://github.com/Certora/CertoraProver/releases/download/${CERTORA_VERSION}/certora-prover-${CERTORA_VERSION}.jar" \
+            --output "$RUNNER_TEMP/certora-prover.jar"
+          echo "${CERTORA_PROVER_SHA256}  $RUNNER_TEMP/certora-prover.jar" | sha256sum --check
+
+      - name: Check out tac_optimizer source
+        run: |
+          git clone --depth 1 --branch "$CERTORA_VERSION" \
+            https://github.com/Certora/CertoraProver.git "$RUNNER_TEMP/CertoraProver"
+          test "$(git -C "$RUNNER_TEMP/CertoraProver" rev-parse HEAD)" = "$CERTORA_PROVER_COMMIT"
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/CertoraProver/fried-egg/target
+          key: tac-optimizer-${{ runner.os }}-${{ runner.arch }}-${{ env.CERTORA_VERSION }}-rust-${{ env.RUST_TOOLCHAIN }}
+
+      - name: Build tac_optimizer
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          cargo "+$RUST_TOOLCHAIN" generate-lockfile \
+            --manifest-path "$RUNNER_TEMP/CertoraProver/fried-egg/Cargo.toml"
+          echo "${TAC_OPTIMIZER_LOCK_SHA256}  $RUNNER_TEMP/CertoraProver/fried-egg/Cargo.lock" \
+            | sha256sum --check
+          cargo "+$RUST_TOOLCHAIN" build --release --locked \
+            --manifest-path "$RUNNER_TEMP/CertoraProver/fried-egg/Cargo.toml"
+          echo "$RUNNER_TEMP/CertoraProver/fried-egg/target/release" >> "$GITHUB_PATH"
+
+      - name: Verify StakeQuantileTreeLib locally
+        run: |
+          z3 --version
+          cvc5 --version
+          tac_optimizer --help >/dev/null
+          certoraRun certora/conf/StakeQuantileTree.conf \
+            --jar "$RUNNER_TEMP/certora-prover.jar" \
+            --rule "${{ matrix.rule }}"
+
+      - name: Upload local prover reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certora-reports-${{ matrix.rule }}
+          path: emv-*/Reports/
+          if-no-files-found: warn

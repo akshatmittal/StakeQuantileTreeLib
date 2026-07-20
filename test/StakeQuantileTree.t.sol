@@ -179,6 +179,16 @@ contract StakeQuantileTreeTest is Test {
         overflow.addRaw(0xABCD, 1);
     }
 
+    function test_oversizedAmountUsesCustomErrorAndLeavesTreeUnchanged() external {
+        tree.addRaw(0x1234, 1);
+
+        vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__SumOverflow.selector);
+        tree.addRaw(0x1234, type(uint256).max);
+
+        assertEq(tree.rawTotal(), 1, "reverted update changed support");
+        assertEq(tree.rawQuantile(1, 1), 0x1234, "reverted update changed quantile");
+    }
+
     function test_rootTotalOverflowUsesCustomErrorAcrossDistinctChildren() external {
         tree.addRaw(0x0000, type(uint128).max);
         tree.addRaw(0x1000, 1);
@@ -187,6 +197,45 @@ contract StakeQuantileTreeTest is Test {
         tree.rawTotal();
         vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__SumOverflow.selector);
         tree.rawLowerMedian();
+    }
+
+    function test_exactUint128AggregateAcrossRootChildrenSucceeds() external {
+        uint256 left = type(uint128).max / 2;
+        uint256 right = type(uint128).max - left;
+        tree.addRaw(0x0000, left);
+        tree.addRaw(0xFFFF, right);
+
+        assertEq(tree.rawTotal(), type(uint128).max);
+        assertEq(tree.rawQuantile(1, type(uint128).max), 0x0000);
+        assertEq(tree.rawQuantile(type(uint128).max, type(uint128).max), 0xFFFF);
+        (uint16 median, uint256 support) = tree.rawLowerMedian();
+        assertEq(median, 0xFFFF);
+        assertEq(support, type(uint128).max);
+    }
+
+    function test_zeroAmountIsNoOpEvenWhenAmountLaneIsFull() external {
+        tree.addRaw(0xBEEF, type(uint128).max);
+        tree.addRaw(0xBEEF, 0);
+
+        assertEq(tree.rawTotal(), type(uint128).max);
+        assertEq(tree.rawQuantile(type(uint128).max, type(uint128).max), 0xBEEF);
+    }
+
+    function test_packedLaneAndPrefixIsolationAtEveryLevel() external {
+        uint16[8] memory codes = [uint16(0x0000), 0x0001, 0x000F, 0x0010, 0x00F0, 0x0100, 0x1000, 0xFFFF];
+        uint256 total;
+        for (uint256 i; i < codes.length; i++) {
+            tree.addRaw(codes[i], i + 1);
+            total += i + 1;
+        }
+
+        uint256 rank = 1;
+        for (uint256 i; i < codes.length; i++) {
+            uint256 end = rank + i;
+            for (; rank <= end; rank++) {
+                assertEq(tree.rawQuantile(rank, total), codes[i]);
+            }
+        }
     }
 
     function test_weightEncodingBoundariesAndRepresentatives() external {
@@ -241,12 +290,101 @@ contract StakeQuantileTreeTest is Test {
         tree.priceCode(MAX_PRICE + 1);
     }
 
+    function test_priceDecodersRejectEmptyIntegerBuckets() external {
+        uint16[5] memory emptyCodes = [uint16(1), 127, 255, 257, 2047];
+        for (uint256 i; i < emptyCodes.length; i++) {
+            vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode.selector);
+            tree.priceLow(emptyCodes[i]);
+            vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode.selector);
+            tree.priceHigh(emptyCodes[i]);
+            vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode.selector);
+            tree.priceRepresentative(emptyCodes[i]);
+        }
+    }
+
+    function test_allPriceCodesAreOrderedOrExplicitlyRejected() external {
+        for (uint256 rawCode; rawCode <= type(uint16).max; rawCode++) {
+            uint256 exponent = rawCode >> 8;
+            uint256 fraction = rawCode & 0xFF;
+            bool hasIntegerBucket = exponent >= 8 || fraction % (uint256(1) << (8 - exponent)) == 0;
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint16 code = uint16(rawCode);
+
+            if (!hasIntegerBucket) {
+                vm.expectRevert(StakeQuantileTreeLib.StakeQuantileTreeLib__InvalidCode.selector);
+                tree.priceRepresentative(code);
+                continue;
+            }
+
+            uint256 low = tree.priceLow(code);
+            uint256 high = tree.priceHigh(code);
+            uint256 representative = tree.priceRepresentative(code);
+            assertLe(low, high);
+            assertLe(low, representative);
+            assertLe(representative, high);
+            assertLe(high, MAX_PRICE);
+        }
+    }
+
     function testFuzz_priceEncodingContainsOriginal(uint256 seed) external view {
         uint256 price = bound(seed, 1, MAX_PRICE);
         uint16 code = tree.priceCode(price);
         assertLe(tree.priceLow(code), price);
         assertLe(price, tree.priceHigh(code));
         assertLe(tree.priceRepresentative(code), MAX_PRICE);
+    }
+
+    function testFuzz_weightEncodingContainsOriginal(uint256 seed) external view {
+        uint256 weight = bound(seed, 1, D18);
+        uint16 code = tree.weightCode(weight);
+        assertLe(tree.weightLow(code), weight);
+        assertLe(weight, tree.weightHigh(code));
+    }
+
+    function testFuzz_priceGeneratedBucketRoundTrips(uint256 seed) external view {
+        uint256 price = bound(seed, 1, MAX_PRICE);
+        uint16 code = tree.priceCode(price);
+        assertEq(tree.priceCode(tree.priceLow(code)), code);
+        assertEq(tree.priceCode(tree.priceHigh(code)), code);
+    }
+
+    function testFuzz_rawQuantileMatchesArbitraryRank(
+        uint16[8] calldata codes,
+        uint128[8] calldata stakeSeeds,
+        uint256 rankSeed
+    ) external {
+        uint16[8] memory sortedCodes;
+        uint256[8] memory sortedStakes;
+        uint256 total;
+
+        for (uint256 i; i < 8; i++) {
+            uint256 stake = bound(uint256(stakeSeeds[i]), 1, type(uint128).max / 8);
+            tree.addRaw(codes[i], stake);
+            total += stake;
+            sortedCodes[i] = codes[i];
+            sortedStakes[i] = stake;
+
+            uint256 j = i;
+            while (j != 0 && sortedCodes[j] < sortedCodes[j - 1]) {
+                (sortedCodes[j], sortedCodes[j - 1]) = (sortedCodes[j - 1], sortedCodes[j]);
+                (sortedStakes[j], sortedStakes[j - 1]) = (sortedStakes[j - 1], sortedStakes[j]);
+                j--;
+            }
+        }
+
+        uint256 rank = bound(rankSeed, 1, total);
+        uint256 cumulative;
+        uint16 expected;
+        for (uint256 i; i < 8; i++) {
+            cumulative += sortedStakes[i];
+            if (rank <= cumulative) {
+                expected = sortedCodes[i];
+                break;
+            }
+        }
+
+        assertEq(tree.rawTotal(), total);
+        assertEq(tree.rawQuantile(rank, total), expected);
     }
 
     function testFuzz_rawQuantileMatchesSortedWeightedList(uint16[8] calldata codes, uint32[8] calldata stakeSeeds)

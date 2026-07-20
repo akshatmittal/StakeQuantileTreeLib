@@ -27,9 +27,13 @@ library StakeQuantileTreeLib {
     // ==== Tree updates ====
 
     /// Adds stake to a raw-only tree. Each child sum is stored as a uint128.
+    /// @dev The caller must keep the aggregate tree support within uint128 and exclusively own `tree`.
     function addRaw(mapping(uint256 key => uint256 packed) storage tree, uint16 code, uint256 amount) internal {
         if (amount == 0) {
             return;
+        }
+        if (amount > type(uint128).max) {
+            revert StakeQuantileTreeLib__SumOverflow();
         }
 
         uint256 prefix;
@@ -67,7 +71,8 @@ library StakeQuantileTreeLib {
     // ==== Exact-rank queries ====
 
     /// Returns the first code whose cumulative raw stake reaches `rank`.
-    /// @dev `rank` is one-indexed; callers normally pass `lowerMedianRank(total)`.
+    /// @dev `rank` is one-indexed and `total` must equal the tree's authoritative support. Callers normally
+    ///      pass `lowerMedianRank(total)`.
     function rawQuantile(mapping(uint256 key => uint256 packed) storage tree, uint256 rank, uint256 total)
         internal
         view
@@ -225,7 +230,7 @@ library StakeQuantileTreeLib {
         uint256 level,
         uint256 prefix,
         uint256 rank
-    ) private view returns (uint256 nextPrefix, uint256 nextRank) {
+    ) internal view returns (uint256 nextPrefix, uint256 nextRank) {
         for (uint256 pair; pair < 8; pair++) {
             uint256 word = tree[_rawKey(level, prefix, pair << 1)];
             uint256 evenStake = word & type(uint128).max;
@@ -257,5 +262,9 @@ library StakeQuantileTreeLib {
     function _priceParts(uint16 code) private pure returns (uint256 exponent, uint256 fraction) {
         exponent = uint256(code) >> 8;
         fraction = uint256(code) & 0xFF;
+        // At low exponents, most fractional intervals contain no integer price and can never be emitted by priceCode.
+        if (exponent < 8 && fraction % (uint256(1) << (8 - exponent)) != 0) {
+            revert StakeQuantileTreeLib__InvalidCode();
+        }
     }
 }
