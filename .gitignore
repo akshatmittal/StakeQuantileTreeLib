@@ -1,0 +1,11 @@
+out/
+cache/
+broadcast/
+snapshots/
+node_modules/
+plans/
+.env
+.seed
+.DS_Store
+
+CLAUDE.md
