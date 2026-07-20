@@ -134,10 +134,17 @@ jobs:
             --jar "$RUNNER_TEMP/certora-prover.jar" \
             --rule "${{ matrix.rule }}"
 
+      - name: Archive local prover reports
+        if: always()
+        run: |
+          if compgen -G "emv-*/Reports" >/dev/null; then
+            tar -czf certora-reports.tar.gz emv-*/Reports
+          fi
+
       - name: Upload local prover reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: certora-reports-${{ matrix.rule }}
-          path: emv-*/Reports/
+          path: certora-reports.tar.gz
           if-no-files-found: warn
