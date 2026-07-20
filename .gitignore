@@ -2,6 +2,8 @@ out/
 cache/
 broadcast/
 snapshots/
+.certora_internal/
+emv-*/
 node_modules/
 plans/
 .env
