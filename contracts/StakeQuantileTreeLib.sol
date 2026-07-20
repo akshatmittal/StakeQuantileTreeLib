@@ -115,29 +115,7 @@ library StakeQuantileTreeLib {
         support = sum;
         uint256 rank = lowerMedianRank(support);
         uint256 prefix;
-        bool found;
-
-        for (uint256 pair; pair < 8; pair++) {
-            uint256 word = rootWords[pair];
-            uint256 evenStake = word & type(uint128).max;
-            if (rank <= evenStake) {
-                prefix = pair << 1;
-                found = true;
-                break;
-            }
-            rank -= evenStake;
-
-            uint256 oddStake = (word >> 128) & type(uint128).max;
-            if (rank <= oddStake) {
-                prefix = (pair << 1) | 1;
-                found = true;
-                break;
-            }
-            rank -= oddStake;
-        }
-        if (!found) {
-            revert StakeQuantileTreeLib__NoCrossingChild();
-        }
+        (prefix, rank) = _crossingChildInWords(rootWords, rank);
 
         for (uint256 level = 1; level < RADIX_LEVELS; level++) {
             (prefix, rank) = _crossingChild(tree, level, prefix, rank);
@@ -242,6 +220,29 @@ library StakeQuantileTreeLib {
             uint256 oddStake = (word >> 128) & type(uint128).max;
             if (rank <= oddStake) {
                 return ((prefix << 4) | (pair << 1) | 1, rank);
+            }
+            rank -= oddStake;
+        }
+
+        revert StakeQuantileTreeLib__NoCrossingChild();
+    }
+
+    function _crossingChildInWords(uint256[8] memory words, uint256 rank)
+        internal
+        pure
+        returns (uint256 nextPrefix, uint256 nextRank)
+    {
+        for (uint256 pair; pair < 8; pair++) {
+            uint256 word = words[pair];
+            uint256 evenStake = word & type(uint128).max;
+            if (rank <= evenStake) {
+                return (pair << 1, rank);
+            }
+            rank -= evenStake;
+
+            uint256 oddStake = (word >> 128) & type(uint128).max;
+            if (rank <= oddStake) {
+                return ((pair << 1) | 1, rank);
             }
             rank -= oddStake;
         }

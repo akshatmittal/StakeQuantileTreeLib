@@ -65,6 +65,14 @@ contract StakeQuantileTreeHarness {
         return StakeQuantileTreeLib._crossingChild(_tree, level, prefix, rank);
     }
 
+    function crossingChildInRootWords(uint256 rank) external view returns (uint256 nextPrefix, uint256 nextRank) {
+        uint256[8] memory rootWords;
+        for (uint256 pair; pair < 8; pair++) {
+            rootWords[pair] = _tree[pair];
+        }
+        return StakeQuantileTreeLib._crossingChildInWords(rootWords, rank);
+    }
+
     function nodeTotal(uint256 level, uint256 prefix) external view returns (uint256 total) {
         for (uint256 pair; pair < 8; pair++) {
             uint256 word = _tree[rawKey(level, prefix, pair << 1)];

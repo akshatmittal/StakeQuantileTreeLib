@@ -16,6 +16,31 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/certora.yml"
   workflow_dispatch:
+    inputs:
+      target:
+        description: Matrix job name to run, or all
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - storage-safety
+          - storage-path-word
+          - storage-off-path
+          - storage-root-total
+          - storage-split
+          - storage-commute
+          - quantile-median-consistency
+          - quantile-monotonicity
+          - quantile-crossing
+          - quantile-rank
+          - weights
+          - price-encoding-containment
+          - price-encoding-low-roundtrip
+          - price-encoding-high-roundtrip
+          - price-encoding-monotonicity
+          - price-invalid-inputs
+          - price-decoding
 
 permissions:
   contents: read
@@ -34,6 +59,7 @@ env:
 jobs:
   verify:
     name: Verify ${{ matrix.name }}
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.name
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -45,6 +71,7 @@ jobs:
             rules: >-
               packedKeysAreInjectiveAcrossNodes zeroAmountIsStorageNoOp
               oversizedUpdateRevertsAtomically overflowingRootLaneRevertsAtomically
+              trackedTotalUpdatesCommute
           - name: storage-path-word
             rules: pathPackedWordChangesExactly
           - name: storage-off-path
@@ -54,11 +81,11 @@ jobs:
           - name: storage-split
             rules: splitUpdateEqualsCombinedUpdate
           - name: storage-commute
-            rules: updatesCommute
+            rules: updatesCommuteOnPath
           - name: quantile-median-consistency
-            rules: lowerMedianMatchesExplicitQuantile
+            rules: rootWordCrossingMatchesStorage
           - name: quantile-monotonicity
-            rules: quantilesAreMonotone
+            rules: crossingChildIsMonotone
           - name: quantile-crossing
             rules: crossingChildSelectsFirstRankCrossing
           - name: quantile-rank
@@ -68,8 +95,10 @@ jobs:
               weightEncodingContainsInput weightCodesAreMonotone invalidWeightCodesRevert
           - name: price-encoding-containment
             rules: priceEncodingContainsInput
-          - name: price-encoding-roundtrip
-            rules: priceGeneratedBucketEndpointsRoundTrip
+          - name: price-encoding-low-roundtrip
+            rules: priceGeneratedBucketLowRoundTrips
+          - name: price-encoding-high-roundtrip
+            rules: priceGeneratedBucketHighRoundTrips
           - name: price-encoding-monotonicity
             rules: priceCodesAreMonotone
           - name: price-invalid-inputs

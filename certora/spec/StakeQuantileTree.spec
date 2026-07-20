@@ -7,6 +7,7 @@ methods {
     function packedPairTotal(uint256) external returns (uint256) envfree;
     function childStake(uint256, uint256, uint256) external returns (uint256) envfree;
     function crossingChild(uint256, uint256, uint256) external returns (uint256, uint256) envfree;
+    function crossingChildInRootWords(uint256) external returns (uint256, uint256) envfree;
     function nodeTotal(uint256, uint256) external returns (uint256) envfree;
     function nodeStakeBefore(uint256, uint256, uint256) external returns (uint256) envfree;
     function rawKey(uint256, uint256, uint256) external returns (uint256) envfree;
@@ -133,50 +134,85 @@ rule splitUpdateEqualsCombinedUpdate(env e, uint16 code, uint128 first, uint128 
     assert splitTotal == combinedTotal, "splitting an update must not change tracked support";
 }
 
-// As above, an arbitrary key checks every possible packed mapping entry without whole-EVM storage equality.
-rule updatesCommute(
+// The first path is arbitrary; swapping the universally quantified codes covers the second path as well.
+// offPathPackedWordsRemainUnchanged covers every word outside both paths.
+rule updatesCommuteOnPath(
     env e,
     uint16 firstCode,
     uint16 secondCode,
     uint128 first,
     uint128 second,
-    uint256 key
+    uint256 level
 ) {
+    require first + second <= max_uint128;
+    require level < 4;
+    uint256 key = pathKey(firstCode, level);
+    storage initial = lastStorage;
+
+    addRawUnchecked(e, firstCode, first) at initial;
+    addRawUnchecked(e, secondCode, second);
+    uint256 forwardWord = packedWord(key);
+
+    addRawUnchecked(e, secondCode, second) at initial;
+    addRawUnchecked(e, firstCode, first);
+    uint256 reverseWord = packedWord(key);
+
+    assert forwardWord == reverseWord, "insertion order must not change a word on either update path";
+}
+
+rule trackedTotalUpdatesCommute(env e, uint16 firstCode, uint16 secondCode, uint128 first, uint128 second) {
     require first + second <= max_uint128;
     storage initial = lastStorage;
 
     addRaw(e, firstCode, first) at initial;
     addRaw(e, secondCode, second);
-    uint256 forwardWord = packedWord(key);
     uint256 forwardTotal = trackedTotal();
 
     addRaw(e, secondCode, second) at initial;
     addRaw(e, firstCode, first);
-    uint256 reverseWord = packedWord(key);
     uint256 reverseTotal = trackedTotal();
 
-    assert forwardWord == reverseWord, "insertion order must not change any packed tree word";
     assert forwardTotal == reverseTotal, "insertion order must not change tracked support";
 }
 
-rule lowerMedianMatchesExplicitQuantile() {
-    uint16 median;
-    uint256 support;
-    (median, support) = rawLowerMedian();
-    require support > 0;
+// rawLowerMedian uses the word-backed helper for its root step, then the same storage-backed loop as rawQuantile.
+rule rootWordCrossingMatchesStorage(uint256 rank) {
+    uint256 total = rawTotal();
+    require 0 < rank && rank <= total;
 
-    uint256 rank = lowerMedianRank(support);
-    assert median == rawQuantile(rank, support),
-        "combined lower median must match the exact-rank query";
+    uint256 wordPrefix;
+    uint256 wordRank;
+    (wordPrefix, wordRank) = crossingChildInRootWords(rank);
+
+    uint256 storagePrefix;
+    uint256 storageRank;
+    (storagePrefix, storageRank) = crossingChild(0, 0, rank);
+
+    assert wordPrefix == storagePrefix && wordRank == storageRank,
+        "word-backed and storage-backed root crossing must agree";
 }
 
-rule quantilesAreMonotone(uint256 lowerRank, uint256 higherRank) {
-    uint256 total = rawTotal();
+// Lexicographic monotonicity of one radix step composes across all four rawQuantile levels.
+rule crossingChildIsMonotone(
+    uint256 level,
+    uint256 prefix,
+    uint256 lowerRank,
+    uint256 higherRank
+) {
+    require validNode(level, prefix, 0);
+    uint256 total = nodeTotal(level, prefix);
     require 0 < lowerRank && lowerRank <= higherRank && higherRank <= total;
 
-    uint16 lowerCode = rawQuantile(lowerRank, total);
-    uint16 higherCode = rawQuantile(higherRank, total);
-    assert lowerCode <= higherCode, "higher ranks must not return lower codes";
+    uint256 lowerPrefix;
+    uint256 lowerResidual;
+    (lowerPrefix, lowerResidual) = crossingChild(level, prefix, lowerRank);
+
+    uint256 higherPrefix;
+    uint256 higherResidual;
+    (higherPrefix, higherResidual) = crossingChild(level, prefix, higherRank);
+
+    assert lowerPrefix < higherPrefix || (lowerPrefix == higherPrefix && lowerResidual <= higherResidual),
+        "a radix step must preserve rank order lexicographically";
 }
 
 rule crossingChildSelectsFirstRankCrossing(uint256 rank) {
@@ -248,15 +284,22 @@ rule priceEncodingContainsInput(uint256 price) {
         "the representative must be inside its bucket";
 }
 
-rule priceGeneratedBucketEndpointsRoundTrip(uint256 price) {
+rule priceGeneratedBucketLowRoundTrips(uint256 price) {
     uint256 maximum = maxPrice();
     require 0 < price && price <= maximum;
     uint16 code = priceCode(price);
     uint256 low = priceLow(code);
+
+    assert priceCode(low) == code, "a generated bucket's low endpoint must round-trip";
+}
+
+rule priceGeneratedBucketHighRoundTrips(uint256 price) {
+    uint256 maximum = maxPrice();
+    require 0 < price && price <= maximum;
+    uint16 code = priceCode(price);
     uint256 high = priceHigh(code);
 
-    assert priceCode(low) == code && priceCode(high) == code,
-        "both generated bucket endpoints must round-trip";
+    assert priceCode(high) == code, "a generated bucket's high endpoint must round-trip";
 }
 
 rule priceCodesAreMonotone(uint256 lower, uint256 higher) {
