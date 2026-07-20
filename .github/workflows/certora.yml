@@ -33,35 +33,37 @@ env:
 
 jobs:
   verify:
-    name: Verify ${{ matrix.rule }}
+    name: Verify ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        rule:
-          - packedKeysAreInjectiveAcrossNodes
-          - zeroAmountIsStorageNoOp
-          - updateChangesExactlyItsFourPathLanes
-          - successfulUpdateIncreasesTotal
-          - oversizedUpdateRevertsAtomically
-          - overflowingRootLaneRevertsAtomically
-          - splitUpdateEqualsCombinedUpdate
-          - updatesCommute
-          - lowerMedianMatchesExplicitQuantile
-          - quantilesAreMonotone
-          - crossingChildSelectsFirstRankCrossing
-          - lowerMedianRankIsCeilingHalf
-          - weightEncodingContainsInput
-          - weightCodesAreMonotone
-          - invalidWeightCodesRevert
-          - priceEncodingContainsInput
-          - priceCodesAreMonotone
-          - successfulPriceBucketsAreOrdered
-          - emptyIntegerPriceBucketsRevert
-          - terminalPriceCodesClamp
-          - invalidPricesRevert
+        include:
+          - name: storage-basics
+            rules: >-
+              packedKeysAreInjectiveAcrossNodes zeroAmountIsStorageNoOp
+              successfulUpdateIncreasesTotal oversizedUpdateRevertsAtomically
+              overflowingRootLaneRevertsAtomically
+          - name: storage-algebra
+            rules: >-
+              updateChangesExactlyItsFourPathLanes splitUpdateEqualsCombinedUpdate
+              updatesCommute
+          - name: quantiles
+            rules: >-
+              lowerMedianMatchesExplicitQuantile quantilesAreMonotone
+              crossingChildSelectsFirstRankCrossing lowerMedianRankIsCeilingHalf
+          - name: weights
+            rules: >-
+              weightEncodingContainsInput weightCodesAreMonotone invalidWeightCodesRevert
+          - name: price-encoding
+            rules: >-
+              priceEncodingContainsInput priceCodesAreMonotone invalidPricesRevert
+          - name: price-decoding
+            rules: >-
+              successfulPriceBucketsAreOrdered emptyIntegerPriceBucketsRevert
+              terminalPriceCodesClamp
     steps:
       - uses: actions/checkout@v7
 
@@ -130,9 +132,10 @@ jobs:
           z3 --version
           cvc5 --version
           tac_optimizer --help >/dev/null
+          read -ra rules <<< "${{ matrix.rules }}"
           certoraRun certora/conf/StakeQuantileTree.conf \
             --jar "$RUNNER_TEMP/certora-prover.jar" \
-            --rule "${{ matrix.rule }}"
+            --rule "${rules[@]}"
 
       - name: Archive local prover reports
         if: always()
@@ -145,6 +148,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: certora-reports-${{ matrix.rule }}
+          name: certora-reports-${{ matrix.name }}
           path: certora-reports.tar.gz
           if-no-files-found: warn
